@@ -1,0 +1,77 @@
+name: Build Linux desktop
+
+# Builds the Compose Multiplatform desktop app on GitHub's runners.
+# Mirrors the linux job from the upstream release workflow, but triggered by hand
+# and without creating a release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version stamped into the packages"
+        required: true
+        default: "1.8.1-main"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-linux-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    name: Linux · AppImage + deb
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fakeroot binutils file
+          curl -sSL -o appimagetool.AppImage \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool.AppImage
+
+      - run: chmod +x gradlew
+
+      - name: Build the distributable and the deb
+        run: |
+          ./gradlew :desktopApp:createDistributable :desktopApp:packageDeb \
+            -Pbitchord.version=${{ inputs.version }}
+
+      - name: The analyser and models are in the jar
+        run: |
+          jar=$(ls desktopApp/build/compose/binaries/main/app/BitChord/lib/app/desktopApp*.jar)
+          jar tf "$jar" | grep -q 'native/libbitchord_analysis.so'
+          jar tf "$jar" | grep -q 'models/.*\.onnx'
+
+      - name: Wrap the AppImage
+        run: |
+          mkdir -p dist
+          desktopApp/packaging/appimage.sh \
+            desktopApp/build/compose/binaries/main/app/BitChord \
+            "dist/BitChord-${{ inputs.version }}-linux-x86_64.AppImage" \
+            "$PWD/appimagetool.AppImage"
+
+      - name: Collect
+        run: |
+          cp desktopApp/build/compose/binaries/main/deb/*.deb \
+            "dist/BitChord-${{ inputs.version }}-linux-amd64.deb"
+          ls -lh dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bitchord-linux-desktop
+          path: dist/*
+          retention-days: 7
